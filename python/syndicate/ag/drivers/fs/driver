@@ -29,6 +29,7 @@ import time
 import threading
 import json
 import logging
+import sqlite3
 import syndicate.util.gateway as gateway
 import syndicate.ag.fs_driver_common.abstract_fs as abstract_fs
 
@@ -54,36 +55,14 @@ ENTRY_UPDATED = 0
 ENTRY_ADDED = 1
 ENTRY_REMOVED = 2
 
-def datasets_update_cb(updated_entries, added_entries, removed_entries):
-    global path_queue
-
-    for u in updated_entries:
-        entry = {}
-        entry["flag"] = ENTRY_UPDATED
-        entry["stat"] = u
-        path_queue.append(entry)
-
-    for a in added_entries:
-        entry = {}
-        entry["flag"] = ENTRY_ADDED
-        entry["stat"] = a
-        path_queue.append(entry)
-
-    for r in removed_entries:
-        entry = {}
-        entry["flag"] = ENTRY_REMOVED
-        entry["stat"] = r
-        path_queue.append(entry)
-
-
-def driver_init( driver_config, driver_secrets ):
-    """
-    Do the one-time driver setup.
-    """
-
+def _initFS( driver_config, driver_secrets, scan_dataset=False):
     global fs
     global dataset_dir
 
+    if fs:
+        return True
+
+    # continue only when fs is not initialized
     if not driver_config.has_key('DRIVER_FS_BACKEND'):
         gateway.log_error("No DRIVER_FS_BACKEND defined")
         return False
@@ -119,11 +98,54 @@ def driver_init( driver_config, driver_secrets ):
             return False
 
         fs.set_notification_cb(datasets_update_cb)
-        fs.connect()
+        fs.connect(scan_dataset)
     except Exception as e:
         gateway.log_error("Unable to initialize a driver")
         gateway.log_error(str(e))
         traceback.print_exc()
+        return False
+
+def _shutdownFS():
+    global fs
+    if fs:
+        try:
+            fs.close()
+        except Exception as e:
+            pass
+    fs = None
+
+def datasets_update_cb(updated_entries, added_entries, removed_entries):
+    global path_queue
+
+    for u in updated_entries:
+        entry = {}
+        entry["flag"] = ENTRY_UPDATED
+        entry["stat"] = u
+        path_queue.append(entry)
+
+    for a in added_entries:
+        entry = {}
+        entry["flag"] = ENTRY_ADDED
+        entry["stat"] = a
+        path_queue.append(entry)
+
+    for r in removed_entries:
+        entry = {}
+        entry["flag"] = ENTRY_REMOVED
+        entry["stat"] = r
+        path_queue.append(entry)
+
+
+def driver_init( driver_config, driver_secrets ):
+    """
+    Do the one-time driver setup.
+    """
+
+    global fs
+    global dataset_dir
+
+    if not _initFS( driver_config, driver_secrets, True ):
+        gateway.log_error("Unable to init filesystem")
         return False
 
     if not fs.exists( dataset_dir ):
@@ -141,12 +163,7 @@ def driver_shutdown():
     """
     Do the one-time driver shutdown
     """
-    global fs
-    if fs:
-        try:
-            fs.close()
-        except Exception as e:
-            pass
+    _shutdownFS()
     
 
 def next_dataset( driver_config, driver_secrets ):
@@ -194,7 +211,7 @@ def next_dataset( driver_config, driver_secrets ):
             elif flag == ENTRY_ADDED:
                 cmd = gateway.make_metadata_command( "create", "directory", 0555, None, publish_path )
             elif flag == ENTRY_REMOVED:
-                cmd = gateway.make_metadata_command( "remove", "directory", 0555, None, publish_path )
+                cmd = gateway.make_metadata_command( "delete", "directory", 0555, None, publish_path )
 
         else:
             # file 
@@ -203,7 +220,7 @@ def next_dataset( driver_config, driver_secrets ):
             elif flag == ENTRY_ADDED:
                 cmd = gateway.make_metadata_command( "create", "file", 0555, stat.size, publish_path )
             elif flag == ENTRY_REMOVED:
-                cmd = gateway.make_metadata_command( "remove", "file", 0555, stat.size, publish_path )
+                cmd = gateway.make_metadata_command( "delete", "file", 0555, stat.size, publish_path )
 
         if cmd is not None:
             # have a command!
@@ -230,21 +247,13 @@ def read( request, chunk_fd, driver_config, driver_secrets ):
     @driver_config is a dict containing the driver's config
     @driver_secrets is a dict containing the driver's unencrypted secrets
     """
- 
-    if not driver_config.has_key('DRIVER_FS_BACKEND'):
-        gateway.log_error("No DRIVER_FS_BACKEND defined")
-        sys.exit(1)
 
-    if not driver_config.has_key('DRIVER_FS_BACKEND_CONFIG'):
-        gateway.log_error("No DRIVER_FS_BACKEND_CONFIG defined")
-        sys.exit(1)
+    global fs
+    global dataset_dir
 
-    if not driver_config.has_key('DATASET_DIR'):
-        gateway.log_error("No DATASET_DIR defined")
-        sys.exit(1)
-
-    dataset_dir = driver_config['DATASET_DIR']
-    dataset_dir = "/" + dataset_dir.strip("/")
+    if not _initFS( driver_config, driver_secrets, False ):
+        gateway.log_error("Unable to init filesystem")
+        sys.exit(1) 
 
     path = gateway.request_path( request )
     file_path = gateway.path_join( dataset_dir, path )
@@ -260,32 +269,6 @@ def read( request, chunk_fd, driver_config, driver_secrets ):
     if byte_len is None:
         # this is a bug
         gateway.log_error("BUG: byte len of request on %s is not defined" % file_path )
-        sys.exit(1)
-
-    backend = driver_config['DRIVER_FS_BACKEND']
-
-    if isinstance(driver_config['DRIVER_FS_BACKEND_CONFIG'], dict):
-        backend_config = driver_config['DRIVER_FS_BACKEND_CONFIG']
-    elif isinstance(driver_config['DRIVER_FS_BACKEND_CONFIG'], basestring):
-        json_backend_config = driver_config['DRIVER_FS_BACKEND_CONFIG']
-        backend_config = json.loads(json_backend_config)
-
-    backend_config["secrets"] = driver_secrets
-    backend_config["dataset_root"] = dataset_dir
-
-    try:
-        loader = fs_backend_loader(backend, backend_config)
-        fs = loader.load()
-
-        if not fs:
-            gateway.log_error("No such driver backend found: %s" % backend )
-            sys.exit(1)
-
-        fs.connect()
-    except Exception as e:
-        gateway.log_error("Unable to initialize a driver")
-        gateway.log_error(str(e))
-        traceback.print_exc()
         sys.exit(1)
 
     if not fs.exists( file_path ):

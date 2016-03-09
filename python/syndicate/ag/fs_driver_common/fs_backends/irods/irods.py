@@ -17,15 +17,14 @@
 """
 
 """
-iPlant Data Store Backend
+General iRODS Backend
 """
 
 import os
 import time
 import syndicate.ag.fs_driver_common.abstract_fs as abstract_fs
 import syndicate.ag.fs_driver_common.metadata as metadata
-import syndicate.ag.fs_driver_common.fs_backends.iplant_datastore.bms_client as bms_client
-import syndicate.ag.fs_driver_common.fs_backends.iplant_datastore.irods_client as irods_client
+import syndicate.ag.fs_driver_common.fs_backends.irods.irods_client as irods_client
 
 class backend_impl(abstract_fs.fs_base):
     def __init__(self, config):
@@ -58,12 +57,7 @@ class backend_impl(abstract_fs.fs_base):
         if not irods_config:
             raise ValueError("irods configuration is not given correctly")
 
-        bms_config = config.get("bms")
-        if not bms_config:
-            raise ValueError("bms configuration is not given correctly")
-
         self.irods_config = irods_config
-        self.bms_config = bms_config
 
         # init irods client
         # we convert unicode (maybe) strings to ascii since python-irodsclient cannot accept unicode strings
@@ -77,20 +71,6 @@ class backend_impl(abstract_fs.fs_base):
                                                user=user, 
                                                password=password, 
                                                zone=irods_zone)
-        # init bms client
-        path_filter = dataset_root.rstrip("/") + "/*"
-
-        acceptor = bms_client.bms_message_acceptor("path", 
-                                                   path_filter)
-        self.bms = bms_client.bms_client(host=self.bms_config["host"], 
-                                         port=self.bms_config["port"], 
-                                         user=user, 
-                                         password=password, 
-                                         vhost=self.bms_config["vhost"],
-                                         acceptors=[acceptor])
-
-
-        self.bms.setCallbacks(on_message_callback=self._on_bms_message_receive)
 
         # init dataset tracker
         self.dataset_tracker = metadata.dataset_tracker(root_path=dataset_root,
@@ -98,66 +78,6 @@ class backend_impl(abstract_fs.fs_base):
                                                         request_for_update_handler=self._on_request_update)
 
         self.notification_cb = None
-
-    def _on_bms_message_receive(self, message):
-        # parse message and update directory
-        if not message or len(message) <= 0:
-            return
-
-        msg = json.loads(message)
-        operation = msg.get("operation")
-        if operation:
-            if operation in ["collection.add", "collection.rm", "data-object.add", "data-object.rm", "data-object.mod"]:
-                path = msg.get("path")
-                if path:
-                    parent_path = os.path.dirname(path)
-                    entries = self.irods.listStats(parent_path)
-                    stats = []
-                    for e in entries:
-                        stat = abstract_fs.fs_stat(directory=e.directory, 
-                                                   path=e.path,
-                                                   name=e.name, 
-                                                   size=e.size,
-                                                   checksum=e.checksum,
-                                                   create_time=e.create_time,
-                                                   modify_time=e.modify_time)
-                        stats.append(stat)
-                    self.dataset_tracker.updateDirectory(path=parent_path, entries=stats)
-
-            elif operation in ["collection.mv", "data-object.mv"]:
-                old_path = msg.get("old-path")
-                old_parent_path = None
-                if old_path:
-                    old_parent_path = os.path.dirname(old_path)
-                    entries = self.irods.listStats(old_parent_path)
-                    stats = []
-                    for e in entries:
-                        stat = abstract_fs.fs_stat(directory=e.directory, 
-                                                   path=e.path,
-                                                   name=e.name, 
-                                                   size=e.size,
-                                                   checksum=e.checksum,
-                                                   create_time=e.create_time,
-                                                   modify_time=e.modify_time)
-                        stats.append(stat)
-                    self.dataset_tracker.updateDirectory(path=old_parent_path, entries=stats)
-
-                new_path = msg.get("new-path")
-                if new_path:
-                    new_parent_path = os.path.dirname(new_path)
-                    if new_parent_path != old_parent_path:
-                        entries = self.irods.listStats(new_parent_path)
-                        stats = []
-                        for e in entries:
-                            stat = abstract_fs.fs_stat(directory=e.directory, 
-                                                       path=e.path,
-                                                       name=e.name, 
-                                                       size=e.size,
-                                                       checksum=e.checksum,
-                                                       create_time=e.create_time,
-                                                       modify_time=e.modify_time)
-                            stats.append(stat)
-                        self.dataset_tracker.updateDirectory(path=new_parent_path, entries=stats)
 
     def _on_dataset_update(self, updated_entries, added_entries, removed_entries):
         if self.notification_cb:
@@ -179,7 +99,6 @@ class backend_impl(abstract_fs.fs_base):
 
     def connect(self, scan_dataset=True):
         self.irods.connect()
-        self.bms.connect()
 
         if scan_dataset:
             # add initial dataset
@@ -198,7 +117,6 @@ class backend_impl(abstract_fs.fs_base):
             self.dataset_tracker.updateDirectory(path=dataset_root, entries=stats)
 
     def close(self):
-        self.bms.close()
         self.irods.close()
 
     def exists(self, path):

@@ -53,7 +53,7 @@ class fs_base(object):
 
     # connect to remote system if necessary
     @abstractmethod
-    def connect(self):
+    def connect(self, scan_dataset=True):
         pass
 
     # disconnect and finalize
@@ -91,10 +91,6 @@ class fs_base(object):
     # return a class of backend plugin
     @abstractmethod
     def backend(self):
-        pass
-
-    @abstractmethod
-    def notification_supported(self):
         pass
 
     @abstractmethod
