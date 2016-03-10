@@ -90,14 +90,14 @@ class backend_impl(abstract_fs.fs_base):
         entries = self.irods.listStats(entry.path)
         stats = []
         for e in entries:
-            stat = abstract_fs.fs_stat(directory=e.directory, 
+            sb = abstract_fs.fs_stat(directory=e.directory, 
                                        path=e.path,
                                        name=e.name, 
                                        size=e.size,
                                        checksum=e.checksum,
                                        create_time=e.create_time,
                                        modify_time=e.modify_time)
-            stats.append(stat)
+            stats.append(sb)
         self.dataset_tracker.updateDirectory(path=entry.path, entries=stats)
 
     def connect(self, scan_dataset=True):
@@ -112,14 +112,14 @@ class backend_impl(abstract_fs.fs_base):
                 # get stat
                 sb = os.stat(entry_path)
 
-                stat = abstract_fs.fs_stat(directory=stat.S_ISDIR(sb.st_mode), 
+                st = abstract_fs.fs_stat(directory=stat.S_ISDIR(sb.st_mode), 
                                            path=entry_path,
                                            name=entry, 
                                            size=sb.st_size,
                                            checksum=0,
                                            create_time=sb.st_ctime,
                                            modify_time=sb.st_mtime)
-                stats.append(stat)
+                stats.append(st)
             self.dataset_tracker.updateDirectory(path=dataset_root, entries=stats)
 
         # start monitoring
