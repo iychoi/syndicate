@@ -24,8 +24,33 @@ import sys
 import errno
 import time
 import stat
+import logging
+import pyinotify
+
 import syndicate.ag.fs_driver_common.abstract_fs as abstract_fs
 import syndicate.ag.fs_driver_common.metadata as metadata
+
+logger = logging.getLogger('local_filesystem')
+logger.setLevel(logging.DEBUG)
+# create file handler which logs even debug messages
+fh = logging.FileHandler('local_filesystem.log')
+fh.setLevel(logging.DEBUG)
+# create formatter and add it to the handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+# add the handlers to the logger
+logger.addHandler(fh)
+
+class InotifyEventHandler(pyinotify.ProcessEvent):
+    def process_IN_CREATE(self, event):
+        logger.info("Creating: %s" % event.pathname)
+
+    def process_IN_DELETE(self, event):
+        logger.info("Removing: %s" % event.pathname)
+
+    def process_IN_MODIFY(self, event):
+        logger.info("Modifying: %s" % event.pathname)
+
 
 class backend_impl(abstract_fs.fs_base):
     def __init__(self, config):
@@ -39,6 +64,16 @@ class backend_impl(abstract_fs.fs_base):
         # config can have unicode strings
         dataset_root = dataset_root.encode('ascii','ignore')
         dataset_root = dataset_root.rstrip("/")
+
+        # set inotify
+        self.watch_manager = pyinotify.WatchManager()
+        self.notifier = pyinotify.ThreadedNotifier(self.watch_manager, 
+                                                   InotifyEventHandler())
+
+        mask = pyinotify.IN_DELETE | pyinotify.IN_CREATE | pyinotify.IN_MODIFY
+        self.watch_directory = self.watch_manager.add_watch(dataset_root, 
+                                                            mask, 
+                                                            rec=True)
 
         # init dataset tracker
         self.dataset_tracker = metadata.dataset_tracker(root_path=dataset_root,
@@ -87,8 +122,15 @@ class backend_impl(abstract_fs.fs_base):
                 stats.append(stat)
             self.dataset_tracker.updateDirectory(path=dataset_root, entries=stats)
 
+        # start monitoring
+        self.notifier.start()
+
     def close(self):
-        pass
+        if self.watch_manager and self.watch_directory:
+            self.watch_manager.rm_watch(self.watch_directory.values())
+
+        if self.notifier:
+            self.notifier.stop()
 
     def exists(self, path):
         ascii_path = path.encode('ascii','ignore')
@@ -109,9 +151,9 @@ class backend_impl(abstract_fs.fs_base):
         ascii_path = filepath.encode('ascii','ignore')
         buf = None
         try:
-            with open( ascii_path, "r" ) as f:
+            with open(ascii_path, "r") as f:
                 f.seek(offset)
-                buf = f.read( size )
+                buf = f.read(size)
         except Exception, e:
             gateway.log_error("Failed to read %s: %s" % (file_path, e))
             sys.exit(1)

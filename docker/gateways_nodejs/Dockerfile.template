@@ -49,7 +49,7 @@ RUN make install
 # syndicate
 ##############################################
 RUN apt-get install -y protobuf-compiler libprotobuf-dev libcurl4-gnutls-dev libmicrohttpd-dev libjson0-dev valgrind cython python-protobuf libssl-dev python-crypto python-requests
-RUN pip install pika python-irodsclient retrying timeout_decorator
+RUN pip install pika python-irodsclient retrying timeout_decorator pyinotify
 
 USER syndicate
 WORKDIR $HOME
